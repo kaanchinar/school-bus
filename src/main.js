@@ -4,6 +4,8 @@ import L from 'leaflet';
 
 const appRoot = document.querySelector('#app');
 
+const OSRM_BASE_URL = 'https://router.project-osrm.org';
+
 appRoot.innerHTML = `
   <div class="app">
     <header>
@@ -119,39 +121,68 @@ computeButton.addEventListener('click', async () => {
     return;
   }
 
-  const rawAnts = parseInt(antsInput.value, 10);
-  const rawIterations = parseInt(iterationsInput.value, 10);
-  const ants = Number.isFinite(rawAnts) ? Math.max(rawAnts, students.length + 1) : Math.max(60, students.length + 1);
-  const iterations = Number.isFinite(rawIterations) ? rawIterations : 120;
-  const alpha = parseFloat(alphaInput.value) || 1.2;
-  const beta = parseFloat(betaInput.value) || 4;
-  const evaporation = parseFloat(evaporationInput.value) || 0.45;
+  computeButton.disabled = true;
 
-  statusEl.textContent = 'Running ant colony optimization...';
-  await waitFrame();
+  try {
+    const rawAnts = parseInt(antsInput.value, 10);
+    const rawIterations = parseInt(iterationsInput.value, 10);
+    const ants = Number.isFinite(rawAnts) ? Math.max(rawAnts, students.length + 1) : Math.max(60, students.length + 1);
+    const iterations = Number.isFinite(rawIterations) ? rawIterations : 120;
+    const alpha = parseFloat(alphaInput.value) || 1.2;
+    const beta = parseFloat(betaInput.value) || 4;
+    const evaporation = parseFloat(evaporationInput.value) || 0.45;
 
-  const nodes = buildNodeList();
-  const distanceMatrix = buildDistanceMatrix(nodes);
-  const t0 = performance.now();
-  const result = antColonyOptimization(distanceMatrix, {
-    ants,
-    iterations,
-    alpha,
-    beta,
-    evaporation,
-    q: 120
-  });
-  const elapsed = performance.now() - t0;
+    statusEl.textContent = 'Fetching road-network distances from OSRM...';
+    await waitFrame();
 
-  if (!result || !Array.isArray(result.tour)) {
-    statusEl.textContent = 'Optimization failed. Try adjusting parameters or adding more ants/iterations.';
-    return;
+    const nodes = buildNodeList();
+    const distanceMatrix = await getDistanceMatrix(nodes);
+
+    statusEl.textContent = 'Running ant colony optimization...';
+    await waitFrame();
+
+    const t0 = performance.now();
+    const result = antColonyOptimization(distanceMatrix, {
+      ants,
+      iterations,
+      alpha,
+      beta,
+      evaporation,
+      q: 120
+    });
+    const elapsed = performance.now() - t0;
+
+    if (!result || !Array.isArray(result.tour)) {
+      throw new Error('Optimization failed. Try adjusting parameters or adding more ants/iterations.');
+    }
+
+    let osrmRoute = null;
+    try {
+      statusEl.textContent = 'Fetching street-aligned route...';
+      osrmRoute = await fetchOsrmRoute(result.tour, nodes);
+    } catch (routeError) {
+      console.warn('OSRM route fetch failed, drawing straight segments instead.', routeError);
+    }
+
+    renderRoute(result.tour, nodes, osrmRoute?.latLngs);
+    const km = (osrmRoute?.distanceKm ?? result.length);
+    const duration = osrmRoute?.durationMinutes;
+    const distanceSummary = duration
+      ? `Total path length: ${km.toFixed(2)} km (~${duration.toFixed(1)} min)`
+      : `Total path length: ${km.toFixed(2)} km`;
+    distanceEl.textContent = distanceSummary;
+    const baseMessage = `Route updated in ${(elapsed / 1000).toFixed(2)} s using ${ants} ants and ${iterations} iterations.`;
+    statusEl.textContent = osrmRoute
+      ? `${baseMessage} Road-following polyline retrieved from OSRM.`
+      : `${baseMessage} Shown as straight segments (OSRM unavailable).`;
+  } catch (error) {
+    console.error(error);
+    statusEl.textContent = typeof error?.message === 'string'
+      ? `Optimization failed: ${error.message}`
+      : 'Optimization failed due to an unexpected error.';
+  } finally {
+    computeButton.disabled = false;
   }
-
-  renderRoute(result.tour, nodes);
-  const km = result.length;
-  distanceEl.textContent = `Total path length: ${km.toFixed(2)} km`;
-  statusEl.textContent = `Route updated in ${(elapsed / 1000).toFixed(2)} s using ${ants} ants and ${iterations} iterations.`;
 });
 
 function setMode(nextMode) {
@@ -229,7 +260,26 @@ function buildNodeList() {
   return nodeList;
 }
 
-function buildDistanceMatrix(nodes) {
+async function getDistanceMatrix(nodes) {
+  const maxPublicOsrmNodes = 100;
+  if (nodes.length > maxPublicOsrmNodes) {
+    statusEl.textContent = `Public OSRM limit exceeded (${nodes.length} > ${maxPublicOsrmNodes}). Falling back to straight-line distances.`;
+    await waitFrame();
+    return buildHaversineMatrix(nodes);
+  }
+
+  try {
+    const matrix = await fetchOsrmMatrix(nodes);
+    return matrix;
+  } catch (error) {
+    console.warn('OSRM matrix unavailable, using straight-line distances instead.', error);
+    statusEl.textContent = 'OSRM matrix unavailable. Using straight-line distances as fallback.';
+    await waitFrame();
+    return buildHaversineMatrix(nodes);
+  }
+}
+
+function buildHaversineMatrix(nodes) {
   const matrix = Array.from({ length: nodes.length }, () => Array(nodes.length).fill(0));
   for (let i = 0; i < nodes.length; i++) {
     for (let j = i + 1; j < nodes.length; j++) {
@@ -239,6 +289,46 @@ function buildDistanceMatrix(nodes) {
     }
   }
   return matrix;
+}
+
+async function fetchOsrmMatrix(nodes) {
+  const coords = nodes.map((node) => `${node.lng},${node.lat}`).join(';');
+  const url = `${OSRM_BASE_URL}/table/v1/driving/${coords}?annotations=distance`;
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`OSRM table request failed with status ${response.status}`);
+  }
+  const data = await response.json();
+  if (!Array.isArray(data.distances)) {
+    throw new Error('OSRM response missing distance matrix');
+  }
+  const fallbackDistance = 1e6; // km ~ far away to discourage unreachable hops
+  return data.distances.map((row) => row.map((value) => (Number.isFinite(value) ? value / 1000 : fallbackDistance)));
+}
+
+async function fetchOsrmRoute(tour, nodes) {
+  if (!tour || tour.length < 2) {
+    throw new Error('Route requires at least two points.');
+  }
+  const coords = tour.map((index) => `${nodes[index].lng},${nodes[index].lat}`).join(';');
+  const url = `${OSRM_BASE_URL}/route/v1/driving/${coords}?overview=full&geometries=geojson`;
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`OSRM route request failed with status ${response.status}`);
+  }
+  const data = await response.json();
+  if (!Array.isArray(data.routes) || !data.routes.length) {
+    throw new Error('OSRM response missing route geometry');
+  }
+  const route = data.routes[0];
+  if (!route || !route.geometry || !Array.isArray(route.geometry.coordinates)) {
+    throw new Error('OSRM route geometry invalid.');
+  }
+  return {
+    latLngs: route.geometry.coordinates.map(([lng, lat]) => [lat, lng]),
+    distanceKm: Number.isFinite(route.distance) ? route.distance / 1000 : undefined,
+    durationMinutes: Number.isFinite(route.duration) ? route.duration / 60 : undefined
+  };
 }
 
 function haversineDistance(a, b) {
@@ -362,11 +452,13 @@ function depositPheromones(pheromone, tours, lengths, q) {
   }
 }
 
-function renderRoute(tour, nodes) {
+function renderRoute(tour, nodes, geometryLatLngs) {
   if (routeLayer) {
     map.removeLayer(routeLayer);
   }
-  const latLngs = tour.map((index) => [nodes[index].lat, nodes[index].lng]);
+  const latLngs = Array.isArray(geometryLatLngs) && geometryLatLngs.length > 1
+    ? geometryLatLngs
+    : tour.map((index) => [nodes[index].lat, nodes[index].lng]);
   routeLayer = L.polyline(latLngs, {
     color: '#ffa600',
     weight: 4,
