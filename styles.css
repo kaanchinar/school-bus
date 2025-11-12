@@ -1,0 +1,144 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  background-color: #f4f6f8;
+  color: #1a1f36;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+header {
+  padding: 1.5rem 2rem 1rem;
+  background: linear-gradient(120deg, #0f8ec7, #194b9f);
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+}
+
+header h1 {
+  margin: 0 0 0.5rem;
+  font-size: 1.8rem;
+}
+
+header p {
+  margin: 0;
+  max-width: 60ch;
+  line-height: 1.5;
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 2rem;
+  background: #fff;
+  border-bottom: 1px solid #d9e1f2;
+}
+
+.control-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+button {
+  border: none;
+  background: #194b9f;
+  color: #fff;
+  padding: 0.6rem 1.2rem;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+button:hover {
+  background: #143b7e;
+}
+
+button:disabled {
+  background: #93a3c4;
+  cursor: not-allowed;
+}
+
+button.active {
+  background: #0f8ec7;
+}
+
+label {
+  font-size: 0.85rem;
+  display: flex;
+  flex-direction: column;
+  color: #415275;
+}
+
+label input {
+  margin-top: 0.25rem;
+  padding: 0.4rem;
+  border-radius: 4px;
+  border: 1px solid #b7c4dd;
+  min-width: 4.5rem;
+}
+
+main {
+  flex: 1;
+  display: flex;
+  flex-direction: row;
+  min-height: 0;
+}
+
+#map {
+  flex: 1;
+  height: calc(100vh - 220px);
+}
+
+#info-panel {
+  width: 320px;
+  padding: 1.5rem;
+  background: #fff;
+  border-left: 1px solid #d9e1f2;
+  overflow-y: auto;
+}
+
+#info-panel h2 {
+  margin-top: 0;
+}
+
+#status {
+  font-size: 0.95rem;
+  margin-bottom: 0.75rem;
+}
+
+#distance {
+  font-weight: 600;
+  margin-bottom: 1rem;
+}
+
+#route-list {
+  padding-left: 1.25rem;
+}
+
+@media (max-width: 960px) {
+  main {
+    flex-direction: column;
+  }
+
+  #map {
+    height: 50vh;
+  }
+
+  #info-panel {
+    width: 100%;
+    border-left: none;
+    border-top: 1px solid #d9e1f2;
+  }
+}
